@@ -26,6 +26,32 @@ flutter pub get
 flutter run -d chrome
 ```
 
+## Backend Sandbox
+
+Saya juga menambahkan backend minimal di folder [backend](./backend) untuk persiapan integrasi pembayaran online.
+
+Fungsinya:
+
+- membuat transaksi pembayaran
+- mengecek status pembayaran
+- simulasi pembayaran sukses
+- menerima webhook
+
+Menjalankan backend:
+
+```bash
+cd backend
+copy .env.example .env
+npm start
+```
+
+Endpoint utama:
+
+- `POST /api/payments/create`
+- `GET /api/payments/:orderId`
+- `POST /api/payments/:orderId/simulate-paid`
+- `POST /api/payments/webhook`
+
 ## Catatan
 
 Environment saya saat ini belum memiliki Flutter SDK, jadi saya belum bisa menjalankan `flutter create`, `flutter pub get`, atau `flutter run` untuk verifikasi otomatis.

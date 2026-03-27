@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const DiRestoApp());
@@ -847,11 +849,16 @@ class _DiRestoShellPageState extends State<DiRestoShellPage> {
         .toList();
   }
 
-  void _submitCashlessOrder(List<CartEntry> entries, CashlessMethod method) {
+  void _submitCashlessOrder(
+    List<CartEntry> entries,
+    CashlessMethod method, {
+    EWalletProvider? eWalletProvider,
+  }) {
     final order = _createOrder(
       entries: entries,
       paymentMode: PaymentMode.cashless,
       cashlessMethod: method,
+      eWalletProvider: eWalletProvider,
       status: OrderStatus.success,
     );
 
@@ -903,6 +910,7 @@ class _DiRestoShellPageState extends State<DiRestoShellPage> {
       entries: entries,
       paymentMode: PaymentMode.cashless,
       cashlessMethod: CashlessMethod.qris,
+      eWalletProvider: null,
       status: OrderStatus.success,
     );
 
@@ -945,6 +953,7 @@ class _DiRestoShellPageState extends State<DiRestoShellPage> {
     required PaymentMode paymentMode,
     required OrderStatus status,
     CashlessMethod? cashlessMethod,
+    EWalletProvider? eWalletProvider,
   }) {
     final subtotal = entries.fold<int>(0, (sum, entry) => sum + entry.totalPrice);
     final tax = (subtotal * 0.1).round();
@@ -966,6 +975,7 @@ class _DiRestoShellPageState extends State<DiRestoShellPage> {
       total: total,
       paymentMode: paymentMode,
       cashlessMethod: cashlessMethod,
+      eWalletProvider: eWalletProvider,
       status: status,
       createdAt: DateTime.now(),
     );
@@ -1952,7 +1962,11 @@ class PaymentPage extends StatefulWidget {
 
   final List<CartEntry> entries;
   final int taxPercent;
-  final void Function(List<CartEntry> entries, CashlessMethod method)
+  final void Function(
+    List<CartEntry> entries,
+    CashlessMethod method, {
+    EWalletProvider? eWalletProvider,
+  })
       onSubmitCashless;
   final ValueChanged<List<CartEntry>> onSubmitCashier;
 
@@ -1961,8 +1975,16 @@ class PaymentPage extends StatefulWidget {
 }
 
 class _PaymentPageState extends State<PaymentPage> {
+  static int _paymentCounter = 1;
+
   PaymentMode _paymentMode = PaymentMode.cashless;
   CashlessMethod _cashlessMethod = CashlessMethod.qris;
+  EWalletProvider _eWalletProvider = EWalletProvider.shopeepay;
+  VABank _vaBank = VABank.bca;
+  bool _isProcessingPayment = false;
+  final PaymentApiService _paymentApi = const PaymentApiService();
+  PaymentSession? _paymentSession;
+  String? _paymentError;
 
   @override
   Widget build(BuildContext context) {
@@ -2017,51 +2039,117 @@ class _PaymentPageState extends State<PaymentPage> {
                   const SizedBox(height: 20),
                   _Panel(
                     title: 'Metode Pembayaran',
-                    subtitle: 'Pilih cashless atau bayar langsung di kasir.',
+                    subtitle: 'Pilih metode pembayaran seperti daftar checkout aplikasi.',
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children: [
-                            ChoiceChip(
-                              label: const Text('Cashless'),
-                              selected: _paymentMode == PaymentMode.cashless,
-                              onSelected: (_) {
-                                setState(() {
-                                  _paymentMode = PaymentMode.cashless;
-                                });
-                              },
-                            ),
-                            ChoiceChip(
-                              label: const Text('Bayar di Kasir'),
-                              selected: _paymentMode == PaymentMode.cashier,
-                              onSelected: (_) {
-                                setState(() {
-                                  _paymentMode = PaymentMode.cashier;
-                                });
-                              },
-                            ),
-                          ],
+                        const Text(
+                          'PILIH METODE',
+                          style: TextStyle(
+                            fontSize: 12,
+                            letterSpacing: 1.2,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF8A7A70),
+                          ),
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 12),
+                        _buildMethodTile(
+                          icon: Icons.qr_code_2_rounded,
+                          title: 'QRIS',
+                          subtitle: 'Scan QR untuk pembayaran instan',
+                          selected:
+                              _paymentMode == PaymentMode.cashless &&
+                              _cashlessMethod == CashlessMethod.qris,
+                          onTap: () {
+                            setState(() {
+                              _paymentMode = PaymentMode.cashless;
+                              _cashlessMethod = CashlessMethod.qris;
+                            });
+                          },
+                        ),
+                        _buildMethodTile(
+                          icon: Icons.account_balance_wallet_outlined,
+                          title: 'E-Wallet',
+                          subtitle: _eWalletProvider.label,
+                          selected:
+                              _paymentMode == PaymentMode.cashless &&
+                              _cashlessMethod == CashlessMethod.eWallet,
+                          onTap: () {
+                            setState(() {
+                              _paymentMode = PaymentMode.cashless;
+                              _cashlessMethod = CashlessMethod.eWallet;
+                            });
+                          },
+                        ),
+                        if (_paymentMode == PaymentMode.cashless &&
+                            _cashlessMethod == CashlessMethod.eWallet)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: EWalletProvider.values.map((provider) {
+                                final selected = _eWalletProvider == provider;
+                                return ChoiceChip(
+                                  label: Text(provider.label),
+                                  selected: selected,
+                                  onSelected: (_) {
+                                    setState(() {
+                                      _eWalletProvider = provider;
+                                    });
+                                  },
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        _buildMethodTile(
+                          icon: Icons.account_balance_outlined,
+                          title: 'Transfer VA',
+                          subtitle: '${_vaBank.label} Virtual Account',
+                          selected:
+                              _paymentMode == PaymentMode.cashless &&
+                              _cashlessMethod == CashlessMethod.transferVa,
+                          onTap: () {
+                            setState(() {
+                              _paymentMode = PaymentMode.cashless;
+                              _cashlessMethod = CashlessMethod.transferVa;
+                            });
+                          },
+                        ),
+                        if (_paymentMode == PaymentMode.cashless &&
+                            _cashlessMethod == CashlessMethod.transferVa)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: VABank.values.map((bank) {
+                                return ChoiceChip(
+                                  label: Text(bank.label),
+                                  selected: _vaBank == bank,
+                                  onSelected: (_) {
+                                    setState(() {
+                                      _vaBank = bank;
+                                    });
+                                  },
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        _buildMethodTile(
+                          icon: Icons.store_mall_directory_outlined,
+                          title: 'Bayar di Kasir',
+                          subtitle: 'Konfirmasi oleh kasir di tempat',
+                          selected: _paymentMode == PaymentMode.cashier,
+                          onTap: () {
+                            setState(() {
+                              _paymentMode = PaymentMode.cashier;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 16),
                         if (_paymentMode == PaymentMode.cashless)
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: CashlessMethod.values.map((method) {
-                              return ChoiceChip(
-                                label: Text(method.label),
-                                selected: _cashlessMethod == method,
-                                onSelected: (_) {
-                                  setState(() {
-                                    _cashlessMethod = method;
-                                  });
-                                },
-                              );
-                            }).toList(),
-                          )
+                          _buildCashlessPaymentDetail(total)
                         else
                           Container(
                             width: double.infinity,
@@ -2078,26 +2166,38 @@ class _PaymentPageState extends State<PaymentPage> {
                               ),
                             ),
                           ),
+                        if (_paymentSession != null) ...[
+                          const SizedBox(height: 16),
+                          _buildBackendSessionPanel(),
+                        ],
+                        if (_paymentError != null) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            _paymentError!,
+                            style: const TextStyle(
+                              color: Color(0xFFC62828),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 24),
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton(
-                            onPressed: () {
-                              if (_paymentMode == PaymentMode.cashless) {
-                                widget.onSubmitCashless(widget.entries, _cashlessMethod);
-                              } else {
-                                widget.onSubmitCashier(widget.entries);
-                              }
-                            },
+                            onPressed: _isProcessingPayment
+                                ? null
+                                : () => _handlePaymentAction(total),
                             style: FilledButton.styleFrom(
                               backgroundColor: const Color(0xFFC62828),
                             ),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               child: Text(
-                                _paymentMode == PaymentMode.cashless
-                                    ? 'Bayar Sekarang'
-                                    : 'Lanjut Bayar di Kasir',
+                                _isProcessingPayment
+                                    ? 'Memproses Pembayaran...'
+                                    : _paymentMode == PaymentMode.cashless
+                                        ? _cashlessMethod.buttonLabel
+                                        : 'Lanjut Bayar di Kasir',
                               ),
                             ),
                           ),
@@ -2112,6 +2212,333 @@ class _PaymentPageState extends State<PaymentPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildCashlessPaymentDetail(int total) {
+    if (_cashlessMethod == CashlessMethod.qris) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9F6F1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE7D9CE)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 110,
+              height: 110,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE0D5CB)),
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.qr_code_2_rounded,
+                  size: 70,
+                  color: Color(0xFF221B17),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                'Scan QRIS untuk membayar ${formatRupiah(total)}. Setelah scan berhasil, tekan tombol pembayaran untuk menyelesaikan transaksi.',
+                style: const TextStyle(
+                  height: 1.6,
+                  color: Color(0xFF6E625A),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_cashlessMethod == CashlessMethod.eWallet) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9F6F1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE7D9CE)),
+        ),
+        child: Text(
+          'Metode E-Wallet aktif melalui ${_eWalletProvider.label}. User akan membayar sebesar ${formatRupiah(total)} lewat aplikasi wallet yang dipilih.',
+          style: const TextStyle(
+            height: 1.6,
+            color: Color(0xFF6E625A),
+          ),
+        ),
+      );
+    }
+
+    if (_cashlessMethod == CashlessMethod.transferVa) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9F6F1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE7D9CE)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Nomor Virtual Account',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF221B17),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                _buildVirtualAccountNumber(total),
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Transfer tepat sebesar ${formatRupiah(total)} ke ${_vaBank.label} Virtual Account di atas lalu lanjutkan pembayaran.',
+              style: const TextStyle(
+                height: 1.6,
+                color: Color(0xFF6E625A),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9F6F1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE7D9CE)),
+      ),
+      child: Text(
+        'Metode ${_cashlessMethod.label} siap digunakan untuk membayar total ${formatRupiah(total)}. Tekan tombol pembayaran untuk memproses transaksi.',
+        style: const TextStyle(
+          height: 1.6,
+          color: Color(0xFF6E625A),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMethodTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFFCEAEA) : Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected ? const Color(0xFFC62828) : const Color(0xFFE7D9CE),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFFC62828)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF221B17),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF7B6C63),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              selected ? Icons.check_circle : Icons.chevron_right_rounded,
+              color: selected ? const Color(0xFFC62828) : const Color(0xFF8B7B70),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handlePaymentAction(int total) async {
+    if (_paymentMode == PaymentMode.cashier) {
+      widget.onSubmitCashier(widget.entries);
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('Konfirmasi ${_cashlessMethod.label}'),
+            content: Text(_cashlessMethod.confirmationMessage(total)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Batal'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFC62828),
+                ),
+                child: const Text('Bayar'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _isProcessingPayment = true;
+      _paymentError = null;
+    });
+
+    try {
+      final orderId = 'WEB-${_paymentCounter.toString().padLeft(4, '0')}';
+      _paymentCounter++;
+
+      final session = await _paymentApi.createPayment(
+        orderId: orderId,
+        amount: total,
+        entries: widget.entries,
+        paymentMode: _paymentMode,
+        cashlessMethod: _cashlessMethod,
+        eWalletProvider:
+            _cashlessMethod == CashlessMethod.eWallet ? _eWalletProvider : null,
+        vaBank: _cashlessMethod == CashlessMethod.transferVa ? _vaBank : null,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _paymentSession = session;
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      await _paymentApi.simulatePaid(orderId);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isProcessingPayment = false;
+        _paymentError =
+            'Backend pembayaran belum terhubung. Pastikan server backend berjalan di localhost:8080.';
+      });
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    widget.onSubmitCashless(
+      widget.entries,
+      _cashlessMethod,
+      eWalletProvider:
+          _cashlessMethod == CashlessMethod.eWallet ? _eWalletProvider : null,
+    );
+  }
+
+  Widget _buildBackendSessionPanel() {
+    final instructions = _paymentSession!.instructions;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F6F2),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE6D8CB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Session Backend: ${_paymentSession!.orderId}',
+            style: const TextStyle(
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF221B17),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Status: ${_paymentSession!.status}',
+            style: const TextStyle(color: Color(0xFF6E625A)),
+          ),
+          if (instructions['vaNumber'] != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'VA: ${instructions['vaNumber']}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+          if (instructions['accountReference'] != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Ref: ${instructions['accountReference']}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _buildVirtualAccountNumber(int total) {
+    final normalized = total.toString().padLeft(8, '0');
+    return '${_vaBank.code} ${normalized.substring(normalized.length - 8)}';
   }
 
   Widget _summaryRow(String label, String value, {bool emphasized = false}) {
@@ -2714,6 +3141,7 @@ class CustomerOrder {
     required this.total,
     required this.paymentMode,
     required this.cashlessMethod,
+    required this.eWalletProvider,
     required this.status,
     required this.createdAt,
   });
@@ -2725,6 +3153,7 @@ class CustomerOrder {
   final int total;
   final PaymentMode paymentMode;
   final CashlessMethod? cashlessMethod;
+  final EWalletProvider? eWalletProvider;
   final OrderStatus status;
   final DateTime createdAt;
 
@@ -2739,6 +3168,9 @@ class CustomerOrder {
 
   String get paymentDescription {
     if (paymentMode == PaymentMode.cashless && cashlessMethod != null) {
+      if (cashlessMethod == CashlessMethod.eWallet && eWalletProvider != null) {
+        return 'Pembayaran cashless berhasil melalui E-Wallet ${eWalletProvider!.label}.';
+      }
       return 'Pembayaran cashless berhasil melalui ${cashlessMethod!.label}.';
     }
     return 'Pembayaran di kasir sudah dikonfirmasi dan transaksi berhasil.';
@@ -2757,6 +3189,7 @@ class CustomerOrder {
       total: total,
       paymentMode: paymentMode,
       cashlessMethod: cashlessMethod,
+      eWalletProvider: eWalletProvider,
       status: status ?? this.status,
       createdAt: createdAt,
     );
@@ -2775,14 +3208,150 @@ enum OrderStatus {
 
 enum CashlessMethod {
   qris('QRIS'),
-  shopeepay('ShopeePay'),
-  gopay('GoPay'),
-  dana('DANA'),
+  eWallet('E-Wallet'),
   transferVa('Transfer VA');
 
   const CashlessMethod(this.label);
 
   final String label;
+}
+
+enum EWalletProvider {
+  shopeepay('ShopeePay'),
+  gopay('GoPay'),
+  dana('DANA');
+
+  const EWalletProvider(this.label);
+
+  final String label;
+}
+
+enum VABank {
+  bca('BCA', '8808 014'),
+  bni('BNI', '8808 009'),
+  bri('BRI', '8808 002');
+
+  const VABank(this.label, this.code);
+
+  final String label;
+  final String code;
+}
+
+extension CashlessMethodPresentation on CashlessMethod {
+  String get buttonLabel {
+    switch (this) {
+      case CashlessMethod.qris:
+        return 'Bayar dengan QRIS';
+      case CashlessMethod.eWallet:
+        return 'Konfirmasi E-Wallet';
+      case CashlessMethod.transferVa:
+        return 'Konfirmasi Transfer VA';
+    }
+  }
+
+  String confirmationMessage(int total) {
+    switch (this) {
+      case CashlessMethod.qris:
+        return 'Pastikan QRIS sudah discan untuk pembayaran ${formatRupiah(total)}.';
+      case CashlessMethod.eWallet:
+        return 'Pastikan pembayaran E-Wallet sebesar ${formatRupiah(total)} sudah dilakukan.';
+      case CashlessMethod.transferVa:
+        return 'Apakah transfer virtual account sebesar ${formatRupiah(total)} sudah dilakukan?';
+    }
+  }
+}
+
+class PaymentApiService {
+  const PaymentApiService();
+
+  static const String baseUrl = 'http://localhost:8080';
+
+  Future<PaymentSession> createPayment({
+    required String orderId,
+    required int amount,
+    required List<CartEntry> entries,
+    required PaymentMode paymentMode,
+    required CashlessMethod? cashlessMethod,
+    required EWalletProvider? eWalletProvider,
+    required VABank? vaBank,
+  }) async {
+    final paymentMethod = switch (paymentMode) {
+      PaymentMode.cashier => 'cashier',
+      PaymentMode.cashless when cashlessMethod == CashlessMethod.qris => 'qris',
+      PaymentMode.cashless when cashlessMethod == CashlessMethod.eWallet => 'e_wallet',
+      _ => 'transfer_va',
+    };
+
+    final provider = switch (cashlessMethod) {
+      CashlessMethod.eWallet => eWalletProvider?.name,
+      CashlessMethod.transferVa => vaBank?.name,
+      _ => null,
+    };
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/payments/create'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'orderId': orderId,
+        'amount': amount,
+        'paymentMethod': paymentMethod,
+        'provider': provider,
+        'items': entries
+            .map(
+              (entry) => {
+                'name': entry.product.name,
+                'qty': entry.quantity,
+                'price': entry.product.price,
+              },
+            )
+            .toList(),
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Gagal membuat payment session ke backend.');
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final payment = data['payment'] as Map<String, dynamic>;
+    return PaymentSession.fromJson(payment);
+  }
+
+  Future<void> simulatePaid(String orderId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/payments/$orderId/simulate-paid'),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Gagal mensimulasikan pembayaran sukses.');
+    }
+  }
+}
+
+class PaymentSession {
+  const PaymentSession({
+    required this.orderId,
+    required this.paymentMethod,
+    required this.provider,
+    required this.status,
+    required this.instructions,
+  });
+
+  final String orderId;
+  final String paymentMethod;
+  final String? provider;
+  final String status;
+  final Map<String, dynamic> instructions;
+
+  factory PaymentSession.fromJson(Map<String, dynamic> json) {
+    return PaymentSession(
+      orderId: json['orderId'] as String,
+      paymentMethod: json['paymentMethod'] as String,
+      provider: json['provider'] as String?,
+      status: json['status'] as String,
+      instructions: (json['instructions'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+  }
 }
 
 BoxDecoration cardDecoration() {
