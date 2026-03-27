@@ -12,6 +12,12 @@ Backend minimal ini dipakai untuk menyiapkan alur pembayaran online yang lebih r
 
 Saat ini provider default adalah `mock`, jadi backend bisa dipakai untuk uji alur sandbox tanpa dana nyata.
 
+Backend sekarang juga:
+
+- membaca konfigurasi dari file `.env`
+- menyimpan transaksi ke file lokal `data/payments.json`
+- siap dibungkus Docker untuk deployment
+
 ## Menjalankan
 
 1. Pastikan Node.js `>=18` tersedia.
@@ -63,3 +69,14 @@ Untuk production, ganti `PAYMENT_PROVIDER` dari `mock` ke provider nyata lalu sa
 - menampilkan instruksi pembayaran
 - mengecek status pembayaran
 - menerima update dari webhook gateway
+
+## Deploy Container
+
+Backend ini sudah punya `Dockerfile`, jadi bisa dipakai untuk Cloud Run atau platform container lain.
+
+Contoh build lokal:
+
+```bash
+docker build -t diresto-backend .
+docker run -p 8080:8080 diresto-backend
+```

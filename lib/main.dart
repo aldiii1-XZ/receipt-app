@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:receipt_app/app_config.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -3264,7 +3265,7 @@ extension CashlessMethodPresentation on CashlessMethod {
 class PaymentApiService {
   const PaymentApiService();
 
-  static const String baseUrl = 'http://localhost:8080';
+  static const String baseUrl = AppConfig.apiBaseUrl;
 
   Future<PaymentSession> createPayment({
     required String orderId,

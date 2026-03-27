@@ -8,3 +8,4 @@ build/
 pubspec.lock
 node_modules/
 backend/.env
+backend/data/

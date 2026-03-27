@@ -26,6 +26,12 @@ flutter pub get
 flutter run -d chrome
 ```
 
+Untuk memastikan frontend tersambung ke backend lokal, Anda juga bisa memberi environment explicit:
+
+```bash
+flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8080 --dart-define=APP_ENV=local
+```
+
 ## Backend Sandbox
 
 Saya juga menambahkan backend minimal di folder [backend](./backend) untuk persiapan integrasi pembayaran online.
@@ -51,6 +57,28 @@ Endpoint utama:
 - `GET /api/payments/:orderId`
 - `POST /api/payments/:orderId/simulate-paid`
 - `POST /api/payments/webhook`
+
+## Persiapan Online
+
+Yang sudah disiapkan di repo:
+
+- konfigurasi URL backend dari Flutter lewat `--dart-define`
+- backend membaca `.env`
+- backend menyimpan transaksi ke file lokal
+- `backend/Dockerfile` untuk deploy container
+- `firebase.json` untuk deploy Flutter web ke Firebase Hosting
+
+Contoh build web untuk production:
+
+```bash
+flutter build web --dart-define=API_BASE_URL=https://your-backend-url --dart-define=APP_ENV=production
+```
+
+Contoh alur deploy:
+
+1. Deploy backend Node ke Cloud Run / service container lain.
+2. Deploy hasil `build/web` ke Firebase Hosting.
+3. Gunakan URL backend production pada `API_BASE_URL`.
 
 ## Catatan
 
